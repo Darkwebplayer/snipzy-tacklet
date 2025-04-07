@@ -6,8 +6,8 @@ import CodeEditor from "./components/CodeEditor.vue";
 // Initialize your refs
 const code = ref(`// Example function
 function example() {
-  console.log("Hello, World!");
-  return 42;
+  console.log("Hello, Snipzy!");
+  console.log("Tackpad!");
 }`);
 const darkMode = ref(true);
 const wordWrap = ref(false);

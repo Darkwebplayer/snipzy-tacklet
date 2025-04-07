@@ -252,7 +252,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
             const parent = spacer.parentNode;
             if (br) br.remove();
-            spacer.remove();
+            if (spacer.parentNode) spacer.parentNode.removeChild(spacer);
 
             // Set caret correctly after deletion
             if (parent) {
