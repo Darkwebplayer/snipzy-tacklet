@@ -12,6 +12,7 @@ function example() {
 const darkMode = ref(true);
 const wordWrap = ref(false);
 const showLineNumbers = ref(true);
+const language = ref("javascript");
 
 // Connect to Tacklet and load saved data on component mount
 onMounted(async () => {
@@ -29,7 +30,9 @@ onMounted(async () => {
             if (data.wordWrap !== undefined) wordWrap.value = data.wordWrap;
             if (data.showLineNumbers !== undefined)
                 showLineNumbers.value = data.showLineNumbers;
+            if (data.language !== undefined) language.value = data.language;
         }
+        console.log("Data loaded from Tacklet", language.value);
     } catch (error) {
         console.error("Error connecting to Tacklet:", error);
     }
@@ -62,6 +65,7 @@ watch(
             v-model:darkMode="darkMode"
             v-model:wordWrap="wordWrap"
             v-model:showLineNumbers="showLineNumbers"
+            v-model:language="language"
         />
     </div>
 </template>

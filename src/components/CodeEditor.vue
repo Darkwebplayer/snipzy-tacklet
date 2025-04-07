@@ -9,6 +9,7 @@ const props = defineProps<{
     darkMode?: boolean;
     wordWrap?: boolean;
     showLineNumbers?: boolean;
+    language?: string;
 }>();
 
 const emit = defineEmits<{
@@ -16,31 +17,32 @@ const emit = defineEmits<{
     "update:darkMode": [value: boolean];
     "update:wordWrap": [value: boolean];
     "update:showLineNumbers": [value: boolean];
+    "update:language": [value: string];
 }>();
 
-// Create a computed property for darkMode with getter and setter
+// Computed properties for settings with getters and setters.
 const localDarkMode = computed({
     get: () => props.darkMode,
     set: (value) => emit("update:darkMode", value),
 });
 
-// Create a computed property for wordWrap with getter and setter
 const localWordWrap = computed({
     get: () => props.wordWrap,
     set: (value) => emit("update:wordWrap", value),
 });
 
-// Create a computed property for showLineNumbers with getter and setter
 const localShowLineNumbers = computed({
     get: () => props.showLineNumbers,
     set: (value) => emit("update:showLineNumbers", value),
 });
 
-const code = ref(props.modelValue);
-const language = ref("javascript");
+const localLanguage = computed({
+    get: () => props.language || "javascript",
+    set: (value) => emit("update:language", value),
+});
 
-const isWrapped = ref(false);
-const showLineNumbers = ref(true);
+const code = ref(props.modelValue);
+
 const editorRef = ref<HTMLPreElement | null>(null);
 
 const languages = [
@@ -56,6 +58,10 @@ const languages = [
     "sql",
 ];
 
+// Cursor tracking reactive variables.
+const cursorLine = ref(1);
+const cursorColumn = ref(1);
+
 watch(
     () => props.modelValue,
     (newValue) => {
@@ -66,25 +72,103 @@ watch(
     },
 );
 
-const updateCode = (event: Event) => {
-    const target = event.target as HTMLPreElement;
-    code.value = target.textContent || "";
-    emit("update:modelValue", code.value);
-    requestAnimationFrame(() => {
-        highlightCode();
-    });
+// Helper function to update code content and then highlight and update cursor position.
+const updateContent = () => {
+    if (editorRef.value) {
+        const caretOffset = getCaretCharacterOffsetWithin(editorRef.value);
+
+        // ✅ FIX: Convert HTML to plain text with line breaks
+        const rawHtml = editorRef.value.innerHTML;
+        const textWithLineBreaks = rawHtml
+            .replace(/<div>/gi, "<br>")
+            .replace(/<\/div>/gi, "")
+            .replace(/<br\s*[\/]?>/gi, "\n")
+            .replace(/&nbsp;/g, " ")
+            .replace(/<[^>]+>/g, ""); // strip tags
+
+        code.value = textWithLineBreaks;
+        emit("update:modelValue", code.value);
+
+        requestAnimationFrame(() => {
+            highlightCode(caretOffset);
+            updateCursorPosition();
+        });
+    }
 };
 
-const highlightCode = () => {
-    if (editorRef.value) {
-        const result = hljs.highlight(code.value, { language: language.value });
-        editorRef.value.innerHTML = result.value;
-        // Restore cursor position
-        const selection = window.getSelection();
-        if (selection) {
-            selection.selectAllChildren(editorRef.value);
-            selection.collapseToEnd();
+const updateCode = (event: Event) => {
+    updateContent();
+};
+// Helper function: get caret offset relative to the element's text content.
+const getCaretCharacterOffsetWithin = (element: Node): number => {
+    let caretOffset = 0;
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const preCaretRange = range.cloneRange();
+        preCaretRange.selectNodeContents(element);
+        preCaretRange.setEnd(range.startContainer, range.startOffset);
+        caretOffset = preCaretRange.toString().length;
+    }
+    return caretOffset;
+};
+
+// Helper function: set caret position given an offset.
+const setCaretPosition = (element: Node, offset: number) => {
+    const range = document.createRange();
+    const selection = window.getSelection();
+    let currentOffset = offset;
+    // Use a tree walker to traverse text nodes.
+    const treeWalker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+        null,
+    );
+    let node: Node | null = null;
+    while ((node = treeWalker.nextNode())) {
+        const textLength = node.textContent?.length || 0;
+        if (currentOffset <= textLength) {
+            range.setStart(node, currentOffset);
+            range.collapse(true);
+            break;
+        } else {
+            currentOffset -= textLength;
         }
+    }
+    if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+};
+const highlightCode = (caretOffset?: number) => {
+    if (editorRef.value) {
+        // ✅ FIX: Convert \n to <br> after syntax highlighting
+        const highlighted = hljs.highlight(code.value, {
+            language: localLanguage.value,
+        });
+        editorRef.value.innerHTML = highlighted.value.replace(/\n/g, "<br>");
+
+        if (typeof caretOffset === "number") {
+            setTimeout(() => {
+                setCaretPosition(editorRef.value!, caretOffset);
+            }, 0);
+        }
+    }
+};
+
+// Calculate and update the current cursor position (line and column).
+const updateCursorPosition = () => {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && editorRef.value) {
+        const range = selection.getRangeAt(0);
+        const preRange = document.createRange();
+        preRange.selectNodeContents(editorRef.value);
+        preRange.setEnd(range.startContainer, range.startOffset);
+        const preText = preRange.toString();
+        const lines = preText.split("\n");
+        cursorLine.value = lines.length;
+        // Adding one so that the column is 1-indexed.
+        cursorColumn.value = lines[lines.length - 1].length + 1;
     }
 };
 
@@ -98,12 +182,14 @@ const copyCode = async () => {
 };
 
 const getLineNumbers = () => {
-    const lines = code.value.split("\n").length;
-    return Array.from({ length: lines }, (_, i) => i + 1);
+    return Array.from(
+        { length: code.value.split("\n").length },
+        (_, i) => i + 1,
+    );
 };
 
 watch(
-    () => language.value,
+    () => localLanguage.value,
     () => {
         highlightCode();
     },
@@ -111,75 +197,153 @@ watch(
 
 onMounted(() => {
     highlightCode();
+    // Update the cursor position on mount.
+    updateCursorPosition();
 });
 
+// Handle Enter key for inserting a new line.
+
 const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Enter") {
-        event.preventDefault();
-
-        // Get selection
-        const selection = window.getSelection();
-        const range = selection?.getRangeAt(0);
-
-        // Insert new line
-        const textNode = document.createTextNode("\n");
-        range?.insertNode(textNode);
-
-        // Move cursor to end
-        if (selection && range) {
-            range.setStartAfter(textNode);
-            range.setEndAfter(textNode);
-            selection.removeAllRanges();
-            selection.addRange(range);
-        }
-
-        // Update code and highlight
-        if (editorRef.value) {
-            code.value = editorRef.value.textContent || "";
-            emit("update:modelValue", code.value);
-            requestAnimationFrame(() => {
-                highlightCode();
-            });
-        }
-    }
-};
-const handlePaste = (event: ClipboardEvent) => {
-    event.preventDefault();
-
-    // Get plain text from clipboard
-    const text = event.clipboardData?.getData("text/plain") || "";
-
-    // Insert text at cursor position
     const selection = window.getSelection();
     const range = selection?.getRangeAt(0);
+    if (event.key === "Tab") {
+        event.preventDefault();
+        if (range) {
+            const tabNode = document.createTextNode("\t");
+            range.insertNode(tabNode);
+            range.setStartAfter(tabNode);
+            range.setEndAfter(tabNode);
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        }
+        updateContent();
+    } else if (event.key === "Enter") {
+        event.preventDefault();
+        if (range) {
+            const br = document.createElement("br");
+            const spacer = document.createTextNode("\u200B"); // zero-width space
+            range.insertNode(br);
+            range.setStartAfter(br);
+            range.insertNode(spacer);
+            range.setStartAfter(spacer);
+            range.setEndAfter(spacer);
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        }
+        updateContent();
+    } else if (event.key === "Backspace") {
+        const { startContainer, startOffset } = range;
 
+        // Case: Inside a text node, at the beginning, and previous sibling is <br>
+        if (
+            startContainer.nodeType === Node.TEXT_NODE &&
+            startOffset === 0 &&
+            startContainer.previousSibling &&
+            startContainer.previousSibling.nodeName === "BR"
+        ) {
+            event.preventDefault();
+            const br = startContainer.previousSibling;
+            const spacer = startContainer;
+
+            const parent = spacer.parentNode;
+            br.remove();
+            spacer.remove();
+
+            // Set caret correctly after deletion
+            if (parent) {
+                const newRange = document.createRange();
+                const newSelection = window.getSelection();
+                // Find the previous sibling where caret should go
+                let caretTarget = parent.lastChild;
+
+                // If nothing left, just set to empty text node
+                if (!caretTarget || caretTarget.nodeName === "BR") {
+                    const fallback = document.createTextNode("");
+                    parent.appendChild(fallback);
+                    caretTarget = fallback;
+                }
+
+                newRange.setStart(
+                    caretTarget,
+                    caretTarget.textContent?.length || 0,
+                );
+                newRange.collapse(true);
+                if (newSelection) {
+                    newSelection.removeAllRanges();
+                    newSelection.addRange(newRange);
+                }
+            }
+
+            updateContent();
+            return;
+        }
+
+        // Case: In element node just after <br> and spacer
+        if (startContainer.nodeType === Node.ELEMENT_NODE && startOffset > 1) {
+            const nodeBefore = startContainer.childNodes[startOffset - 1];
+            const nodeBeforePrev = startContainer.childNodes[startOffset - 2];
+
+            if (
+                nodeBefore?.nodeName === "BR" &&
+                nodeBeforePrev?.textContent === "\u200B"
+            ) {
+                event.preventDefault();
+
+                // Store reference for caret before deletion
+                const parent = startContainer;
+                const caretTarget = nodeBeforePrev.previousSibling;
+
+                nodeBefore.remove();
+                nodeBeforePrev.remove();
+
+                // Set caret after deletion
+                if (caretTarget) {
+                    const newRange = document.createRange();
+                    const newSelection = window.getSelection();
+                    newRange.setStart(
+                        caretTarget,
+                        caretTarget.textContent?.length || 0,
+                    );
+                    newRange.collapse(true);
+                    if (newSelection) {
+                        newSelection.removeAllRanges();
+                        newSelection.addRange(newRange);
+                    }
+                }
+
+                updateContent();
+                return;
+            }
+        }
+    }
+}; // Handle paste event to insert plain text.
+const handlePaste = (event: ClipboardEvent) => {
+    event.preventDefault();
+    const text = event.clipboardData?.getData("text/plain") || "";
+    const selection = window.getSelection();
+    const range = selection?.getRangeAt(0);
     if (range) {
         range.deleteContents();
         const textNode = document.createTextNode(text);
         range.insertNode(textNode);
-
-        // Move cursor to end of pasted text
         range.setStartAfter(textNode);
         range.setEndAfter(textNode);
         selection?.removeAllRanges();
         selection?.addRange(range);
     }
+    updateContent();
+};
 
-    // Update code and highlight
-    if (editorRef.value) {
-        code.value = editorRef.value.textContent || "";
-        emit("update:modelValue", code.value);
-        requestAnimationFrame(() => {
-            highlightCode();
-        });
-    }
+// Listen to keyup and click events to update cursor position.
+const handleCursorEvents = () => {
+    updateCursorPosition();
 };
 </script>
 
 <template>
-    <div class="code-editor" :class="{ 'dark-mode': darkMode }">
+    <div class="code-editor" :class="{ 'dark-mode': localDarkMode }">
         <div class="toolbar">
-            <select v-model="language" @change="highlightCode">
+            <select v-model="localLanguage" @change="highlightCode">
                 <option v-for="lang in languages" :key="lang" :value="lang">
                     {{ lang }}
                 </option>
@@ -207,13 +371,17 @@ const handlePaste = (event: ClipboardEvent) => {
                     height="16"
                     viewBox="0 0 24 24"
                 >
-                    <!-- Icon from Remix Icon by Remix Design - https://github.com/Remix-Design/RemixIcon/blob/master/License -->
                     <path
                         fill="currentColor"
                         d="M7 6V3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3v3c0 .552-.45 1-1.007 1H4.007A1 1 0 0 1 3 21l.003-14c0-.552.45-1 1.006-1zm2 0h8v10h2V4H9z"
                     />
                 </svg>
             </button>
+
+            <!-- Display current cursor position -->
+            <div class="cursor-position">
+                Line: {{ cursorLine }}, Column: {{ cursorColumn }}
+            </div>
         </div>
 
         <div
@@ -231,10 +399,15 @@ const handlePaste = (event: ClipboardEvent) => {
             </div>
             <pre
                 ref="editorRef"
-                :class="[`language-${language}`, { 'wrap-text': wordWrap }]"
+                :class="[
+                    `language-${localLanguage}`,
+                    { 'wrap-text': localWordWrap },
+                ]"
                 contenteditable="true"
                 @input="updateCode"
                 @keydown="handleKeyDown"
+                @keyup="handleCursorEvents"
+                @click="handleCursorEvents"
                 @paste="handlePaste"
                 spellcheck="false"
                 >{{ code }}</pre
@@ -249,7 +422,6 @@ const handlePaste = (event: ClipboardEvent) => {
     border-radius: 4px;
     overflow: hidden;
     background: #fff;
-    text-align: left;
     color: #333;
 }
 
@@ -270,7 +442,6 @@ const handlePaste = (event: ClipboardEvent) => {
     display: flex;
     gap: 15px;
     align-items: center;
-    color: #333;
 }
 
 .toolbar select,
@@ -287,6 +458,12 @@ const handlePaste = (event: ClipboardEvent) => {
     background: #2d2d2d;
     color: #fff;
     border-color: #444;
+}
+
+.cursor-position {
+    margin-left: auto;
+    font-family: monospace;
+    font-size: 14px;
 }
 
 .editor-container {
@@ -326,7 +503,6 @@ pre {
     font-family: monospace;
     font-size: 14px;
     line-height: 1.5;
-    text-align: left;
     color: #333;
 }
 
