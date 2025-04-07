@@ -96,9 +96,11 @@ const updateContent = () => {
     }
 };
 
-const updateCode = (event: Event) => {
+const updateCode = () => {
+    // Removed unused 'event' parameter
     updateContent();
 };
+
 // Helper function: get caret offset relative to the element's text content.
 const getCaretCharacterOffsetWithin = (element: Node): number => {
     let caretOffset = 0;
@@ -140,6 +142,7 @@ const setCaretPosition = (element: Node, offset: number) => {
         selection.addRange(range);
     }
 };
+
 const highlightCode = (caretOffset?: number) => {
     if (editorRef.value) {
         // ✅ FIX: Convert \n to <br> after syntax highlighting
@@ -202,10 +205,11 @@ onMounted(() => {
 });
 
 // Handle Enter key for inserting a new line.
-
 const handleKeyDown = (event: KeyboardEvent) => {
     const selection = window.getSelection();
-    const range = selection?.getRangeAt(0);
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
     if (event.key === "Tab") {
         event.preventDefault();
         if (range) {
@@ -213,8 +217,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
             range.insertNode(tabNode);
             range.setStartAfter(tabNode);
             range.setEndAfter(tabNode);
-            selection?.removeAllRanges();
-            selection?.addRange(range);
+            selection.removeAllRanges();
+            selection.addRange(range);
         }
         updateContent();
     } else if (event.key === "Enter") {
@@ -227,12 +231,13 @@ const handleKeyDown = (event: KeyboardEvent) => {
             range.insertNode(spacer);
             range.setStartAfter(spacer);
             range.setEndAfter(spacer);
-            selection?.removeAllRanges();
-            selection?.addRange(range);
+            selection.removeAllRanges();
+            selection.addRange(range);
         }
         updateContent();
     } else if (event.key === "Backspace") {
-        const { startContainer, startOffset } = range;
+        const startContainer = range.startContainer;
+        const startOffset = range.startOffset;
 
         // Case: Inside a text node, at the beginning, and previous sibling is <br>
         if (
@@ -246,7 +251,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             const spacer = startContainer;
 
             const parent = spacer.parentNode;
-            br.remove();
+            if (br) br.remove();
             spacer.remove();
 
             // Set caret correctly after deletion
@@ -290,7 +295,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 event.preventDefault();
 
                 // Store reference for caret before deletion
-                const parent = startContainer;
                 const caretTarget = nodeBeforePrev.previousSibling;
 
                 nodeBefore.remove();
@@ -316,7 +320,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
             }
         }
     }
-}; // Handle paste event to insert plain text.
+};
+
+// Handle paste event to insert plain text.
 const handlePaste = (event: ClipboardEvent) => {
     event.preventDefault();
     const text = event.clipboardData?.getData("text/plain") || "";
@@ -343,7 +349,7 @@ const handleCursorEvents = () => {
 <template>
     <div class="code-editor" :class="{ 'dark-mode': localDarkMode }">
         <div class="toolbar">
-            <select v-model="localLanguage" @change="highlightCode">
+            <select v-model="localLanguage">
                 <option v-for="lang in languages" :key="lang" :value="lang">
                     {{ lang }}
                 </option>
