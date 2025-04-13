@@ -10,6 +10,7 @@ const props = defineProps<{
     wordWrap?: boolean;
     showLineNumbers?: boolean;
     language?: string;
+    isHidden?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -18,9 +19,10 @@ const emit = defineEmits<{
     "update:wordWrap": [value: boolean];
     "update:showLineNumbers": [value: boolean];
     "update:language": [value: string];
+    "update:isHidden": [value: boolean];
 }>();
 
-// Computed properties for settings with getters and setters.
+// Computed properties for settings with getters and setters
 const localDarkMode = computed({
     get: () => props.darkMode,
     set: (value) => emit("update:darkMode", value),
@@ -32,7 +34,7 @@ const localWordWrap = computed({
 });
 
 const localShowLineNumbers = computed({
-    get: () => props.showLineNumbers,
+    get: () => props.showLineNumbers ?? true,
     set: (value) => emit("update:showLineNumbers", value),
 });
 
@@ -41,9 +43,19 @@ const localLanguage = computed({
     set: (value) => emit("update:language", value),
 });
 
-const code = ref(props.modelValue);
+const localIsHidden = computed({
+    get: () => props.isHidden ?? false,
+    set: (value) => emit("update:isHidden", value),
+});
 
+const code = ref(props.modelValue);
 const editorRef = ref<HTMLPreElement | null>(null);
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const popoverVisible = ref(false);
+
+// Scroll position tracking
+const top = ref(0);
+const left = ref(0);
 
 const languages = [
     "javascript",
@@ -58,7 +70,7 @@ const languages = [
     "sql",
 ];
 
-// Cursor tracking reactive variables.
+// Cursor tracking reactive variables
 const cursorLine = ref(1);
 const cursorColumn = ref(1);
 
@@ -72,105 +84,46 @@ watch(
     },
 );
 
-// Helper function to update code content and then highlight and update cursor position.
+// Update textarea content and sync with displayed code
 const updateContent = () => {
-    if (editorRef.value) {
-        const caretOffset = getCaretCharacterOffsetWithin(editorRef.value);
-
-        // ✅ FIX: Convert HTML to plain text with line breaks
-        const rawHtml = editorRef.value.innerHTML;
-        const textWithLineBreaks = rawHtml
-            .replace(/<div>/gi, "<br>")
-            .replace(/<\/div>/gi, "")
-            .replace(/<br\s*[\/]?>/gi, "\n")
-            .replace(/&nbsp;/g, " ")
-            .replace(/<[^>]+>/g, ""); // strip tags
-
-        code.value = textWithLineBreaks;
+    if (textareaRef.value) {
+        code.value = textareaRef.value.value;
         emit("update:modelValue", code.value);
-
-        requestAnimationFrame(() => {
-            highlightCode(caretOffset);
-            updateCursorPosition();
-        });
+        highlightCode();
+        updateCursorPosition();
     }
 };
 
-const updateCode = () => {
-    // Removed unused 'event' parameter
-    updateContent();
-};
-
-// Helper function: get caret offset relative to the element's text content.
-const getCaretCharacterOffsetWithin = (element: Node): number => {
-    let caretOffset = 0;
-    const selection = window.getSelection();
-    if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        const preCaretRange = range.cloneRange();
-        preCaretRange.selectNodeContents(element);
-        preCaretRange.setEnd(range.startContainer, range.startOffset);
-        caretOffset = preCaretRange.toString().length;
-    }
-    return caretOffset;
-};
-
-// Helper function: set caret position given an offset.
-const setCaretPosition = (element: Node, offset: number) => {
-    const range = document.createRange();
-    const selection = window.getSelection();
-    let currentOffset = offset;
-    // Use a tree walker to traverse text nodes.
-    const treeWalker = document.createTreeWalker(
-        element,
-        NodeFilter.SHOW_TEXT,
-        null,
-    );
-    let node: Node | null = null;
-    while ((node = treeWalker.nextNode())) {
-        const textLength = node.textContent?.length || 0;
-        if (currentOffset <= textLength) {
-            range.setStart(node, currentOffset);
-            range.collapse(true);
-            break;
-        } else {
-            currentOffset -= textLength;
-        }
-    }
-    if (selection) {
-        selection.removeAllRanges();
-        selection.addRange(range);
-    }
-};
-
-const highlightCode = (caretOffset?: number) => {
+const highlightCode = () => {
     if (editorRef.value) {
-        // ✅ FIX: Convert \n to <br> after syntax highlighting
         const highlighted = hljs.highlight(code.value, {
             language: localLanguage.value,
-        });
-        editorRef.value.innerHTML = highlighted.value.replace(/\n/g, "<br>");
+        }).value;
 
-        if (typeof caretOffset === "number") {
-            setTimeout(() => {
-                setCaretPosition(editorRef.value!, caretOffset);
-            }, 0);
-        }
+        // Replace linebreaks with <br> for proper display
+        editorRef.value.innerHTML = highlighted.replace(/\n/g, "<br>");
     }
 };
 
-// Calculate and update the current cursor position (line and column).
+// Handle textarea scroll to keep highlighted code in sync
+const handleScroll = (event: UIEvent) => {
+    const target = event.target as HTMLTextAreaElement;
+    top.value = -target.scrollTop;
+    left.value = -target.scrollLeft;
+};
+
+// Calculate and update the current cursor position
 const updateCursorPosition = () => {
-    const selection = window.getSelection();
-    if (selection && selection.rangeCount > 0 && editorRef.value) {
-        const range = selection.getRangeAt(0);
-        const preRange = document.createRange();
-        preRange.selectNodeContents(editorRef.value);
-        preRange.setEnd(range.startContainer, range.startOffset);
-        const preText = preRange.toString();
-        const lines = preText.split("\n");
+    if (textareaRef.value) {
+        const textarea = textareaRef.value;
+        const value = textarea.value;
+        const selectionStart = textarea.selectionStart;
+
+        // Get text before cursor
+        const textBeforeCursor = value.substring(0, selectionStart);
+        const lines = textBeforeCursor.split("\n");
+
         cursorLine.value = lines.length;
-        // Adding one so that the column is 1-indexed.
         cursorColumn.value = lines[lines.length - 1].length + 1;
     }
 };
@@ -178,10 +131,22 @@ const updateCursorPosition = () => {
 const copyCode = async () => {
     try {
         await navigator.clipboard.writeText(code.value);
-        alert("Code copied to clipboard!");
+
+        // Show temporary feedback
+        const copyFeedback = document.createElement("div");
+        copyFeedback.textContent = "Copied!";
+        copyFeedback.className = "copy-feedback";
+        document.body.appendChild(copyFeedback);
+
+        setTimeout(() => {
+            document.body.removeChild(copyFeedback);
+        }, 1500);
     } catch (err) {
         console.error("Failed to copy code:", err);
     }
+
+    // Hide popover after copying
+    popoverVisible.value = false;
 };
 
 const getLineNumbers = () => {
@@ -189,6 +154,52 @@ const getLineNumbers = () => {
         { length: code.value.split("\n").length },
         (_, i) => i + 1,
     );
+};
+
+// Handle tab key in textarea
+const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Tab") {
+        event.preventDefault();
+
+        const textarea = textareaRef.value!;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+
+        // Insert tab at cursor position
+        const newValue =
+            textarea.value.substring(0, start) +
+            "  " +
+            textarea.value.substring(end);
+
+        // Update the textarea value
+        textarea.value = newValue;
+
+        // Move cursor after the inserted tab
+        textarea.selectionStart = textarea.selectionEnd = start + 2;
+
+        // Update displayed code
+        updateContent();
+    }
+};
+
+// Toggle popover visibility
+const togglePopover = () => {
+    popoverVisible.value = !popoverVisible.value;
+};
+
+// Click outside handler to close popover
+const handleClickOutside = (event: MouseEvent) => {
+    const popoverEl = document.querySelector(".popover-menu");
+    const settingsButton = document.querySelector(".settings-button");
+
+    if (
+        popoverEl &&
+        settingsButton &&
+        !popoverEl.contains(event.target as Node) &&
+        !settingsButton.contains(event.target as Node)
+    ) {
+        popoverVisible.value = false;
+    }
 };
 
 watch(
@@ -200,201 +211,112 @@ watch(
 
 onMounted(() => {
     highlightCode();
-    // Update the cursor position on mount.
     updateCursorPosition();
+    document.addEventListener("click", handleClickOutside);
 });
-
-// Handle Enter key for inserting a new line.
-const handleKeyDown = (event: KeyboardEvent) => {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
-
-    const range = selection.getRangeAt(0);
-    if (event.key === "Tab") {
-        event.preventDefault();
-        if (range) {
-            const tabNode = document.createTextNode("\t");
-            range.insertNode(tabNode);
-            range.setStartAfter(tabNode);
-            range.setEndAfter(tabNode);
-            selection.removeAllRanges();
-            selection.addRange(range);
-        }
-        updateContent();
-    } else if (event.key === "Enter") {
-        event.preventDefault();
-        if (range) {
-            const br = document.createElement("br");
-            const spacer = document.createTextNode("\u200B"); // zero-width space
-            range.insertNode(br);
-            range.setStartAfter(br);
-            range.insertNode(spacer);
-            range.setStartAfter(spacer);
-            range.setEndAfter(spacer);
-            selection.removeAllRanges();
-            selection.addRange(range);
-        }
-        updateContent();
-    } else if (event.key === "Backspace") {
-        const startContainer = range.startContainer;
-        const startOffset = range.startOffset;
-
-        // Case: Inside a text node, at the beginning, and previous sibling is <br>
-        if (
-            startContainer.nodeType === Node.TEXT_NODE &&
-            startOffset === 0 &&
-            startContainer.previousSibling &&
-            startContainer.previousSibling.nodeName === "BR"
-        ) {
-            event.preventDefault();
-            const br = startContainer.previousSibling;
-            const spacer = startContainer;
-
-            const parent = spacer.parentNode;
-            if (br) br.remove();
-            if (spacer.parentNode) spacer.parentNode.removeChild(spacer);
-
-            // Set caret correctly after deletion
-            if (parent) {
-                const newRange = document.createRange();
-                const newSelection = window.getSelection();
-                // Find the previous sibling where caret should go
-                let caretTarget = parent.lastChild;
-
-                // If nothing left, just set to empty text node
-                if (!caretTarget || caretTarget.nodeName === "BR") {
-                    const fallback = document.createTextNode("");
-                    parent.appendChild(fallback);
-                    caretTarget = fallback;
-                }
-
-                newRange.setStart(
-                    caretTarget,
-                    caretTarget.textContent?.length || 0,
-                );
-                newRange.collapse(true);
-                if (newSelection) {
-                    newSelection.removeAllRanges();
-                    newSelection.addRange(newRange);
-                }
-            }
-
-            updateContent();
-            return;
-        }
-
-        // Case: In element node just after <br> and spacer
-        if (startContainer.nodeType === Node.ELEMENT_NODE && startOffset > 1) {
-            const nodeBefore = startContainer.childNodes[startOffset - 1];
-            const nodeBeforePrev = startContainer.childNodes[startOffset - 2];
-
-            if (
-                nodeBefore?.nodeName === "BR" &&
-                nodeBeforePrev?.textContent === "\u200B"
-            ) {
-                event.preventDefault();
-
-                // Store reference for caret before deletion
-                const caretTarget = nodeBeforePrev.previousSibling;
-
-                nodeBefore.remove();
-                nodeBeforePrev.remove();
-
-                // Set caret after deletion
-                if (caretTarget) {
-                    const newRange = document.createRange();
-                    const newSelection = window.getSelection();
-                    newRange.setStart(
-                        caretTarget,
-                        caretTarget.textContent?.length || 0,
-                    );
-                    newRange.collapse(true);
-                    if (newSelection) {
-                        newSelection.removeAllRanges();
-                        newSelection.addRange(newRange);
-                    }
-                }
-
-                updateContent();
-                return;
-            }
-        }
-    }
-};
-
-// Handle paste event to insert plain text.
-const handlePaste = (event: ClipboardEvent) => {
-    event.preventDefault();
-    const text = event.clipboardData?.getData("text/plain") || "";
-    const selection = window.getSelection();
-    const range = selection?.getRangeAt(0);
-    if (range) {
-        range.deleteContents();
-        const textNode = document.createTextNode(text);
-        range.insertNode(textNode);
-        range.setStartAfter(textNode);
-        range.setEndAfter(textNode);
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-    }
-    updateContent();
-};
-
-// Listen to keyup and click events to update cursor position.
-const handleCursorEvents = () => {
-    updateCursorPosition();
-};
 </script>
 
 <template>
-    <div class="code-editor" :class="{ 'dark-mode': localDarkMode }">
-        <div class="toolbar">
-            <select v-model="localLanguage">
-                <option v-for="lang in languages" :key="lang" :value="lang">
-                    {{ lang }}
-                </option>
-            </select>
+    <div
+        class="code-editor"
+        style="min-height: 200px"
+        :class="{
+            'dark-mode': localDarkMode,
+            'hidden-ui': localIsHidden,
+        }"
+    >
+        <div class="header-bar">
+            <div class="language-selector">
+                <select v-model="localLanguage">
+                    <option v-for="lang in languages" :key="lang" :value="lang">
+                        {{ lang }}
+                    </option>
+                </select>
+            </div>
 
-            <label>
-                <input type="checkbox" v-model="localDarkMode" />
-                Dark Mode
-            </label>
+            <div class="header-controls">
+                <div class="cursor-position" v-if="!localIsHidden">
+                    Line: {{ cursorLine }}, Col: {{ cursorColumn }}
+                </div>
 
-            <label>
-                <input type="checkbox" v-model="localWordWrap" />
-                Wrap Text
-            </label>
-
-            <label>
-                <input type="checkbox" v-model="localShowLineNumbers" />
-                Show Line Numbers
-            </label>
-
-            <button @click="copyCode" title="copy code">
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
+                <button
+                    class="action-button copy-button"
+                    @click="copyCode"
+                    title="Copy code"
+                    v-if="!localIsHidden"
                 >
-                    <path
-                        fill="currentColor"
-                        d="M7 6V3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3v3c0 .552-.45 1-1.007 1H4.007A1 1 0 0 1 3 21l.003-14c0-.552.45-1 1.006-1zm2 0h8v10h2V4H9z"
-                    />
-                </svg>
-            </button>
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                    >
+                        <path
+                            fill="currentColor"
+                            d="M7 6V3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3v3c0 .552-.45 1-1.007 1H4.007A1 1 0 0 1 3 21l.003-14c0-.552.45-1 1.006-1zm2 0h8v10h2V4H9z"
+                        />
+                    </svg>
+                </button>
 
-            <!-- Display current cursor position -->
-            <div class="cursor-position">
-                Line: {{ cursorLine }}, Column: {{ cursorColumn }}
+                <button
+                    class="action-button settings-button"
+                    @click="togglePopover"
+                    title="Settings"
+                    v-if="!localIsHidden"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                    >
+                        <path
+                            fill="currentColor"
+                            d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5zm7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"
+                        />
+                    </svg>
+                </button>
+
+                <!-- Popover Menu -->
+                <div
+                    class="popover-menu"
+                    v-if="popoverVisible && !localIsHidden"
+                >
+                    <div class="popover-item">
+                        <label>
+                            <input type="checkbox" v-model="localDarkMode" />
+                            Dark Mode
+                        </label>
+                    </div>
+                    <div class="popover-item">
+                        <label>
+                            <input type="checkbox" v-model="localWordWrap" />
+                            Wrap Text
+                        </label>
+                    </div>
+                    <div class="popover-item">
+                        <label>
+                            <input
+                                type="checkbox"
+                                v-model="localShowLineNumbers"
+                            />
+                            Line Numbers
+                        </label>
+                    </div>
+                </div>
             </div>
         </div>
 
         <div
             class="editor-container"
-            :class="{ 'with-line-numbers': localShowLineNumbers }"
+            :class="{
+                'with-line-numbers': localShowLineNumbers && !localIsHidden,
+            }"
         >
-            <div v-if="localShowLineNumbers" class="line-numbers">
+            <div
+                v-if="localShowLineNumbers && !localIsHidden"
+                class="line-numbers"
+            >
                 <div
                     v-for="num in getLineNumbers()"
                     :key="num"
@@ -403,117 +325,241 @@ const handleCursorEvents = () => {
                     {{ num }}
                 </div>
             </div>
-            <pre
-                ref="editorRef"
-                :class="[
-                    `language-${localLanguage}`,
-                    { 'wrap-text': localWordWrap },
-                ]"
-                contenteditable="true"
-                @input="updateCode"
-                @keydown="handleKeyDown"
-                @keyup="handleCursorEvents"
-                @click="handleCursorEvents"
-                @paste="handlePaste"
-                spellcheck="false"
-                >{{ code }}</pre
-            >
+
+            <div class="code-area">
+                <!-- Textarea for actual editing -->
+                <textarea
+                    ref="textareaRef"
+                    v-model="code"
+                    @input="updateContent"
+                    @scroll="handleScroll"
+                    @keydown="handleKeyDown"
+                    @keyup="updateCursorPosition"
+                    @click="updateCursorPosition"
+                    spellcheck="false"
+                    :class="{ 'wrap-text': localWordWrap }"
+                ></textarea>
+
+                <!-- Pre element for syntax highlighting -->
+                <pre
+                    ref="editorRef"
+                    :class="[
+                        `language-${localLanguage}`,
+                        { 'wrap-text': localWordWrap },
+                    ]"
+                    :style="{ top: top + 'px', left: left + 'px' }"
+                ></pre>
+            </div>
         </div>
     </div>
 </template>
 
+<style>
+/* Global styles for copy feedback */
+.copy-feedback {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: #4caf50;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 4px;
+    z-index: 9999;
+    animation: fadeOut 1.5s forwards;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+@keyframes fadeOut {
+    0% {
+        opacity: 1;
+    }
+    70% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0;
+    }
+}
+</style>
+
 <style scoped>
 .code-editor {
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
     overflow: hidden;
     background: #fff;
     color: #333;
+    font-family: "Menlo", "Monaco", "Consolas", monospace;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    display: flex;
+    flex-direction: column;
 }
 
 .dark-mode {
     background: #1e1e1e;
     color: #fff;
-}
-
-.dark-mode .toolbar {
-    background: #333;
-    color: #fff;
-}
-
-.toolbar {
-    padding: 10px;
-    background: #f5f5f5;
-    border-bottom: 1px solid #ddd;
-    display: flex;
-    gap: 15px;
-    align-items: center;
-}
-
-.toolbar select,
-.toolbar button {
-    padding: 4px 8px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background: white;
-    color: #333;
-}
-
-.dark-mode .toolbar select,
-.dark-mode .toolbar button {
-    background: #2d2d2d;
-    color: #fff;
     border-color: #444;
 }
 
+.header-bar {
+    padding: 8px 12px;
+    background: #f6f8fa;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.dark-mode .header-bar {
+    background: #2d2d2d;
+    border-bottom-color: #444;
+}
+
+.language-selector select {
+    padding: 4px 8px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: white;
+    color: #333;
+    font-size: 13px;
+    outline: none;
+}
+
+.dark-mode .language-selector select {
+    background: #3a3a3a;
+    color: #eee;
+    border-color: #555;
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+}
+
 .cursor-position {
-    margin-left: auto;
-    font-family: monospace;
-    font-size: 14px;
+    font-family: "Menlo", "Monaco", "Consolas", monospace;
+    font-size: 12px;
+    color: #6e7781;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 4px;
+}
+
+.dark-mode .cursor-position {
+    color: #aaa;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.action-button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6e7781;
+    transition: background-color 0.2s;
+}
+
+.action-button:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: #333;
+}
+
+.dark-mode .action-button {
+    color: #aaa;
+}
+
+.dark-mode .action-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #fff;
 }
 
 .editor-container {
     display: flex;
     position: relative;
+    flex-grow: 1;
 }
 
 .line-numbers {
-    padding: 5px 10px;
-    background: #f5f5f5;
-    border-right: 1px solid #ddd;
-    color: #999;
+    padding: 12px 8px;
+    background: #f8f9fa;
+    border-right: 1px solid #e0e0e0;
+    color: #8a919a;
     user-select: none;
     text-align: right;
-    min-width: 40px;
+    min-width: 34px;
+    z-index: 5;
 }
 
 .dark-mode .line-numbers {
-    background: #2d2d2d;
+    background: #252525;
     border-right-color: #444;
+    color: #6e7781;
 }
 
 .line-number {
-    font-family: monospace;
-    font-size: 14px;
+    font-family: "Menlo", "Monaco", "Consolas", monospace;
+    font-size: 13px;
     line-height: 1.5;
+    padding: 0 4px;
+}
+
+.code-area {
+    position: relative;
+    flex-grow: 1;
+    overflow: hidden;
+}
+
+textarea {
+    font-family: "Menlo", "Monaco", "Consolas", monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 12px;
+    width: 100%;
+    height: 100%;
+    min-height: 240px;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: transparent;
+    caret-color: #333;
+    white-space: pre;
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 10;
+}
+
+.dark-mode textarea {
+    caret-color: #fff;
 }
 
 pre {
-    margin: 0;
-    padding: 15px;
-    outline: none;
-    white-space: pre;
-    overflow-x: auto;
-    min-height: 200px;
-    flex-grow: 1;
-    font-family: monospace;
-    font-size: 14px;
+    font-family: "Menlo", "Monaco", "Consolas", monospace;
+    font-size: 13px;
     line-height: 1.5;
+    padding: 12px;
+    margin: 0;
+    width: 100%;
+    min-height: 240px;
+    white-space: pre;
+    overflow: visible;
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
     color: #333;
 }
 
 .dark-mode pre {
-    color: #fff;
+    color: #eee;
 }
 
 .wrap-text {
@@ -521,24 +567,61 @@ pre {
     word-wrap: break-word;
 }
 
-button {
+/* Popover Menu */
+.popover-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 100;
+    min-width: 160px;
+    padding: 8px 0;
+}
+
+.dark-mode .popover-menu {
+    background: #2d2d2d;
+    border-color: #444;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.popover-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.popover-item:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+.dark-mode .popover-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.popover-item label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #333;
     cursor: pointer;
 }
 
-button:hover {
-    opacity: 0.9;
+.dark-mode .popover-item label {
+    color: #eee;
 }
 
-:deep(.hljs) {
-    background: transparent !important;
-    padding: 0 !important;
+.popover-item input[type="checkbox"] {
+    margin: 0;
 }
 
-select {
-    color: #333 !important;
-}
-
-.dark-mode select {
-    color: #fff !important;
+/* Hidden UI state */
+.hidden-ui .header-bar {
+    padding: 4px 8px;
+    min-height: 30px;
 }
 </style>
