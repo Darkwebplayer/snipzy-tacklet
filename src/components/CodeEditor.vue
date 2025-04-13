@@ -219,7 +219,7 @@ onMounted(() => {
 <template>
     <div
         class="code-editor"
-        style="min-height: 200px"
+        style="min-height: 1200px"
         :class="{
             'dark-mode': localDarkMode,
             'hidden-ui': localIsHidden,
