@@ -106,7 +106,7 @@ const highlightCode = () => {
 };
 
 // Handle textarea scroll to keep highlighted code in sync
-const handleScroll = (event: UIEvent) => {
+const handleScroll = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
     top.value = -target.scrollTop;
     left.value = -target.scrollLeft;
